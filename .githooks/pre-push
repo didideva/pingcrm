@@ -64,12 +64,13 @@ if $RUN_FRONTEND; then
   fi
 
   echo ""
-  echo "━━━ Frontend lint (next lint) ━━━"
-  # Mirror prod build: warnings become errors (matches `next build` behavior).
-  if npx next lint --max-warnings 0 2>&1; then
+  echo "━━━ Frontend lint (eslint) ━━━"
+  # Next 16.3 removed the `next lint` subcommand, so call the project's own
+  # lint script. Warnings become errors to keep this a strict gate.
+  if npm run lint -- --max-warnings 0 2>&1; then
     echo "✅ Lint passed"
   else
-    echo "❌ Lint failed (next build will reject this)"
+    echo "❌ Lint failed"
     FAILED=true
   fi
 
