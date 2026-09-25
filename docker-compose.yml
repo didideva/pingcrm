@@ -1,17 +1,7 @@
 services:
   postgres:
     image: postgres:16-alpine
-    # Published to the host so host-based development (running alembic/uvicorn
-    # from a local venv, per CONTRIBUTING.md) can reach the database at
-    # localhost:5432. Containers on the compose network still use the "postgres"
-    # service hostname.
-    #
-    # Bound to 127.0.0.1 explicitly: "5432:5432" listens on every interface, which
-    # publishes the database to the internet on any host with a public IP. Docker
-    # writes its own iptables DNAT rules that are evaluated before ufw's, so a host
-    # firewall does not cover this.
-    ports:
-      - "127.0.0.1:5432:5432"
+    restart: unless-stopped
     command:
       - postgres
       - -c
@@ -26,7 +16,7 @@ services:
       - tcp_keepalives_count=6
     environment:
       POSTGRES_USER: pingcrm
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DB: pingcrm
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -38,11 +28,7 @@ services:
 
   redis:
     image: redis:7-alpine
-    # Published to the host for host-based development (see postgres above).
-    # Loopback-bound for the same reason, and it matters more here: this dev Redis
-    # has no requirepass, so an all-interfaces bind is an open Redis on the internet.
-    ports:
-      - "127.0.0.1:6379:6379"
+    restart: unless-stopped
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -50,13 +36,16 @@ services:
       retries: 5
 
   backend:
-    build: ./backend
+    image: ghcr.io/sneg55/pingcrm/backend:latest
+    restart: unless-stopped
     env_file:
       - ./backend/.env
     environment:
       DATABASE_URL: postgresql+asyncpg://pingcrm:${POSTGRES_PASSWORD}@postgres:5432/pingcrm
       REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
+      SECRET_KEY: ${SECRET_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
@@ -64,8 +53,6 @@ services:
       TWITTER_CLIENT_SECRET: ${TWITTER_CLIENT_SECRET:-}
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
-      AUTH_TOKEN: ${AUTH_TOKEN:-}
-      CT0: ${CT0:-}
     volumes:
       - avatars:/app/static/avatars
       - ./logs:/app/logs
@@ -75,21 +62,24 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')\""]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/api/health || exit 1"]
+      interval: 5s
+      timeout: 3s
       retries: 5
-      start_period: 15s
+      start_period: 10s
 
   worker:
-    build: ./backend
+    image: ghcr.io/sneg55/pingcrm/backend:latest
+    restart: unless-stopped
     command: celery -A worker.celery_app worker --beat --loglevel=info
     env_file:
       - ./backend/.env
     environment:
       DATABASE_URL: postgresql+asyncpg://pingcrm:${POSTGRES_PASSWORD}@postgres:5432/pingcrm
       REDIS_URL: redis://redis:6379/0
-      SECRET_KEY: ${SECRET_KEY:?Set SECRET_KEY in .env}
+      SECRET_KEY: ${SECRET_KEY}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+      ENVIRONMENT: ${ENVIRONMENT:-development}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
       GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
@@ -97,8 +87,6 @@ services:
       TWITTER_CLIENT_SECRET: ${TWITTER_CLIENT_SECRET:-}
       TELEGRAM_API_ID: ${TELEGRAM_API_ID:-}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH:-}
-      AUTH_TOKEN: ${AUTH_TOKEN:-}
-      CT0: ${CT0:-}
     volumes:
       - avatars:/app/static/avatars
       - ./logs:/app/logs
@@ -111,10 +99,13 @@ services:
       context: ./frontend
       args:
         NEXT_PUBLIC_API_URL: http://backend:8000
+    image: pingcrm-frontend:local
+    restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "3030:3000"
     environment:
       NEXT_PUBLIC_API_URL: http://backend:8000
+      PORT: 3000
     depends_on:
       backend:
         condition: service_healthy
